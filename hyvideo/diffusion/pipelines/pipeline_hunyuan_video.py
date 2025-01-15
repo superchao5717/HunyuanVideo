@@ -838,12 +838,14 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         device = torch.device(f"cuda:{dist.get_rank()}") if dist.is_initialized() else self._execution_device
         
         #如果回收过text_encoder显存，重新加载text_encoder
-        if hasattr(self, "recovery_text_encoder"):
-            if self.recovery_text_encoder and next(self.text_encoder.parameters()).device == torch.device("cpu"):
-                self.text_encoder = self.text_encoder.to(device)
-            if self.recovery_text_encoder and next(self.text_encoder_2.parameters()).device == torch.device("cpu"):
-                self.text_encoder_2 = self.text_encoder_2.to(device)
-            self.recovery_text_encoder = False
+        if device!="cpu":
+            with torch.cuda.stream(device):
+                if hasattr(self, "recovery_text_encoder"):
+                    if self.recovery_text_encoder and next(self.text_encoder.parameters()).device == torch.device("cpu"):
+                        self.text_encoder = self.text_encoder.to(device)
+                    if self.recovery_text_encoder and next(self.text_encoder_2.parameters()).device == torch.device("cpu"):
+                        self.text_encoder_2 = self.text_encoder_2.to(device)
+                    self.recovery_text_encoder = False
 
 
         # 3. Encode input prompt
@@ -901,13 +903,15 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
         
         #回收text_encoder显存
-        if next(self.text_encoder.parameters()).device != torch.device("cpu"):
-            self.text_encoder = self.text_encoder.to("cpu")
-            self.recovery_text_encoder = True
-        if next(self.text_encoder_2.parameters()).device != torch.device("cpu"):
-            self.text_encoder_2 = self.text_encoder_2.to("cpu")
-            self.recovery_text_encoder = True
-        torch.cuda.empty_cache()
+        if device!="cpu":
+            with torch.cuda.stream(device):
+                if next(self.text_encoder.parameters()).device != torch.device("cpu"):
+                    self.text_encoder = self.text_encoder.to("cpu")
+                    self.recovery_text_encoder = True
+                if next(self.text_encoder_2.parameters()).device != torch.device("cpu"):
+                    self.text_encoder_2 = self.text_encoder_2.to("cpu")
+                    self.recovery_text_encoder = True
+            torch.cuda.empty_cache()
             
 
         # For classifier free guidance, we need to do two forward passes.
