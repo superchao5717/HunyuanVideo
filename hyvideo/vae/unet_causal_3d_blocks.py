@@ -36,12 +36,28 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_size: int = None):
     seq_len = n_frame * n_hw
-    mask = torch.full((seq_len, seq_len), float("-inf"), dtype=dtype, device=device)
-    for i in range(seq_len):
-        i_frame = i // n_hw
-        mask[i, : (i_frame + 1) * n_hw] = 0
-    if batch_size is not None:
-        mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
+    if device.type == 'npu':
+        indices = torch.arange(seq_len, dtype=torch.int64, device=device)
+        
+        # 计算每个位置对应的帧索引
+        frame_indices = indices // n_hw
+        
+        # 通过广播机制计算因果掩码
+        mask = (frame_indices.unsqueeze(1) >= (indices // n_hw))
+        
+        # 将mask中的True转换为0，False转换为负无穷大
+        mask = torch.where(mask, torch.tensor(0., dtype=dtype, device=device), torch.tensor(float('-inf'), dtype=dtype, device=device))
+        
+        if batch_size is not None:
+            mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
+    else:
+        seq_len = n_frame * n_hw
+        mask = torch.full((seq_len, seq_len), float("-inf"), dtype=dtype, device=device)
+        for i in range(seq_len):
+            i_frame = i // n_hw
+            mask[i, : (i_frame + 1) * n_hw] = 0
+        if batch_size is not None:
+            mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
     return mask
 
 

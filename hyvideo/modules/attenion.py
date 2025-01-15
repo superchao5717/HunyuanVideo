@@ -15,6 +15,14 @@ except ImportError:
     _flash_attn_forward = None
 
 
+try:
+    import torch_npu
+    torch_npu_fa = True
+except ImportError:
+    torch_npu_fa = False
+
+
+
 MEMORY_LAYOUT = {
     "flash": (
         lambda x: x.view(x.shape[0] * x.shape[1], *x.shape[2:]),
@@ -25,6 +33,10 @@ MEMORY_LAYOUT = {
         lambda x: x.transpose(1, 2),
     ),
     "vanilla": (
+        lambda x: x.transpose(1, 2),
+        lambda x: x.transpose(1, 2),
+    ),
+    "npufa": (
         lambda x: x.transpose(1, 2),
         lambda x: x.transpose(1, 2),
     ),
@@ -93,10 +105,14 @@ def attention(
     Returns:
         torch.Tensor: Output tensor after self attention with shape [b, s, ad]
     """
+    
+    if torch_npu_fa:
+        mode = "npufa"
     pre_attn_layout, post_attn_layout = MEMORY_LAYOUT[mode]
     q = pre_attn_layout(q)
     k = pre_attn_layout(k)
     v = pre_attn_layout(v)
+
 
     if mode == "torch":
         if attn_mask is not None and attn_mask.dtype != torch.bool:
@@ -140,13 +156,29 @@ def attention(
                 attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
             else:
                 attn_bias += attn_mask
-
         # TODO: Maybe force q and k to be float32 to avoid numerical overflow
         attn = (q @ k.transpose(-2, -1)) * scale_factor
         attn += attn_bias
         attn = attn.softmax(dim=-1)
         attn = torch.dropout(attn, p=drop_rate, train=True)
         x = attn @ v
+    elif mode == "npufa":
+        if attn_mask is not None and attn_mask.dtype != torch.bool:
+            attn_mask = attn_mask.to(q.dtype)
+        
+        if attn_mask is not None:
+            x = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=attn_mask, dropout_p=drop_rate, is_causal=causal
+            )
+        else:
+            x = torch_npu.npu_fusion_attention(
+                q, k, v, 
+                head_num = q.shape[1],
+                input_layout = "BNSD",
+                scale= q.shape[-1] ** -0.5,
+                pre_tockens = 2147483647,
+                next_tockens = 2147483647)[0]
+        
     else:
         raise NotImplementedError(f"Unsupported attention mode: {mode}")
 

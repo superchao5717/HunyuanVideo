@@ -836,6 +836,15 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             batch_size = prompt_embeds.shape[0]
 
         device = torch.device(f"cuda:{dist.get_rank()}") if dist.is_initialized() else self._execution_device
+        
+        #如果回收过text_encoder显存，重新加载text_encoder
+        if hasattr(self, "recovery_text_encoder"):
+            if self.recovery_text_encoder and next(self.text_encoder.parameters()).device == torch.device("cpu"):
+                self.text_encoder.to(device)
+            if self.recovery_text_encoder and next(self.text_encoder_2.parameters()).device == torch.device("cpu"):
+                self.text_encoder_2.to(device)
+            self.recovery_text_encoder = False
+
 
         # 3. Encode input prompt
         lora_scale = (
@@ -889,6 +898,17 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             negative_prompt_embeds_2 = None
             prompt_mask_2 = None
             negative_prompt_mask_2 = None
+
+        
+        #回收text_encoder显存
+        if next(self.text_encoder.parameters()).device != torch.device("cpu"):
+            self.text_encoder.to(torch.device("cpu"))
+            self.recovery_text_encoder = True
+        if next(self.text_encoder_2.parameters()).device != torch.device("cpu"):
+            self.text_encoder_2.to(torch.device("cpu"))
+            self.recovery_text_encoder = True
+        torch.cuda.empty_cache()
+            
 
         # For classifier free guidance, we need to do two forward passes.
         # Here we concatenate the unconditional and text embeddings into a single batch
