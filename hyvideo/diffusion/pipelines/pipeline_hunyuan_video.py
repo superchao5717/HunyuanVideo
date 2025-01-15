@@ -902,10 +902,10 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         
         #回收text_encoder显存
         if next(self.text_encoder.parameters()).device != torch.device("cpu"):
-            self.text_encoder = self.text_encoder.to(torch.device("cpu"))
+            self.text_encoder = self.text_encoder.to("cpu")
             self.recovery_text_encoder = True
         if next(self.text_encoder_2.parameters()).device != torch.device("cpu"):
-            self.text_encoder_2 = self.text_encoder_2.to(torch.device("cpu"))
+            self.text_encoder_2 = self.text_encoder_2.to("cpu")
             self.recovery_text_encoder = True
         torch.cuda.empty_cache()
             
