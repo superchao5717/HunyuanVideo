@@ -2,6 +2,12 @@ import torch
 from typing import Union, Tuple, List
 
 
+try:
+    import torch_npu
+    use_npu = True
+except ImportError:
+    use_npu = False
+
 def _to_tuple(x, dim=2):
     if isinstance(x, int):
         return (x,) * dim
@@ -164,11 +170,15 @@ def apply_rotary_emb(
     xk_out = None
     if isinstance(freqs_cis, tuple):
         cos, sin = reshape_for_broadcast(freqs_cis, xq, head_first)  # [S, D]
-        cos, sin = cos.to(xq.device), sin.to(xq.device)
+        cos, sin = cos.to(xq.device,dtype=xq.dtype), sin.to(xq.device,dtype=xq.dtype)
         # real * cos - imag * sin
         # imag * cos + real * sin
-        xq_out = (xq.float() * cos + rotate_half(xq.float()) * sin).type_as(xq)
-        xk_out = (xk.float() * cos + rotate_half(xk.float()) * sin).type_as(xk)
+        if use_npu:
+            xq_out = torch_npu.npu_rotary_mul(xq, cos, sin)
+            xk_out = torch_npu.npu_rotary_mul(xk, cos, sin)
+        else:
+            xq_out = (xq.float() * cos + rotate_half(xq.float()) * sin).type_as(xq)
+            xk_out = (xk.float() * cos + rotate_half(xk.float()) * sin).type_as(xk)
     else:
         # view_as_complex will pack [..., D/2, 2](real) to [..., D/2](complex)
         xq_ = torch.view_as_complex(

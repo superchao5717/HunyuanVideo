@@ -2,6 +2,14 @@ import torch
 import torch.nn as nn
 
 
+
+try:
+    import torch_npu
+    use_npu = True
+except ImportError:
+    use_npu = False
+
+
 class RMSNorm(nn.Module):
     def __init__(
         self,
@@ -53,9 +61,12 @@ class RMSNorm(nn.Module):
             torch.Tensor: The output tensor after applying RMSNorm.
 
         """
-        output = self._norm(x.float()).type_as(x)
-        if hasattr(self, "weight"):
-            output = output * self.weight
+        if use_npu and hasattr(self, "weight"):
+            output = torch_npu.npu_rms_norm(x,x.weight, epsilon = self.eps)[0]
+        else:
+            output = self._norm(x.float()).type_as(x)
+            if hasattr(self, "weight"):
+                output = output * self.weight
         return output
 
 

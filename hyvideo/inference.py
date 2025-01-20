@@ -18,6 +18,99 @@ from hyvideo.modules.posemb_layers import get_nd_rotary_pos_embed
 from hyvideo.modules.fp8_optimization import convert_fp8_linear
 from hyvideo.diffusion.schedulers import FlowMatchDiscreteScheduler
 from hyvideo.diffusion.pipelines import HunyuanVideoPipeline
+from hyvideo.vae.parallel_layers import (
+    PatchCausalConv3d,  
+    PatchConv3d, 
+    PatchGroupNorm3d, 
+    BaseModule,
+    AttnProcessor2_0_sp,
+    AttnProcessor2_0_fa,
+    patchify, 
+    depatchify,
+    register_upsample_forward,
+    register_vae_midblock_forward,
+    )
+from hyvideo.vae.unet_causal_3d_blocks import CausalConv3d, UNetMidBlockCausal3D, UpsampleCausal3D
+from hyvideo.vae.vae import DecoderOutput
+ATTN_PARALLEL = False
+def parallel_full_model_warp(vae, dim=-1):
+    world_size = get_sequence_parallel_world_size()
+    rank = get_sequence_parallel_rank()
+
+    decoder = vae.decoder
+    post_quant_conv = vae.post_quant_conv
+    vae.post_quant_conv = PatchConv3d(post_quant_conv, split_dim=dim)
+
+    
+    for name, module in decoder.named_modules():
+        if isinstance(module, BaseModule):
+            continue
+        for subname, submodule in module.named_children():
+            if isinstance(submodule, CausalConv3d):
+                wrapped_submodule = PatchCausalConv3d(submodule, split_dim=dim, num_blocks=2)
+                setattr(module, subname, wrapped_submodule)
+
+            elif isinstance(submodule, torch.nn.GroupNorm):
+                wrapped_submodule = PatchGroupNorm3d(submodule, split_dim=dim)
+                setattr(module, subname, wrapped_submodule)
+            elif subname == "attentions":
+                if ATTN_PARALLEL:
+                    submodule[0].processor = AttnProcessor2_0_sp(world_size, rank, split_dim=dim)
+                else:
+                    submodule[0].processor = AttnProcessor2_0_fa(world_size, rank, split_dim=dim)
+                setattr(module, subname, submodule)
+                if isinstance(module, UNetMidBlockCausal3D):
+                    register_vae_midblock_forward(module)
+            elif isinstance(submodule, UpsampleCausal3D):
+                register_upsample_forward(submodule)
+
+def parallelize_vae(pipe):
+    vae = pipe.vae
+    parallel_dim = -1
+    parallel_full_model_warp(vae, parallel_dim)
+    
+    @functools.wraps(vae.__class__._decode)
+    def new_decode(
+        self, 
+        z: torch.FloatTensor, 
+        return_dict: bool = True
+        ) -> Union[DecoderOutput, torch.FloatTensor]:
+        r"""
+        Decode a batch of images/videos using a tiled decoder.
+
+        Args:
+            z (`torch.FloatTensor`): Input batch of latent vectors.
+            return_dict (`bool`, *optional*, defaults to `True`):
+                Whether or not to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
+
+        Returns:
+            [`~models.vae.DecoderOutput`] or `tuple`:
+                If return_dict is True, a [`~models.vae.DecoderOutput`] is returned, otherwise a plain `tuple` is
+                returned.
+        """
+
+        parallel_dim = -1
+        parallel_overlap = True
+        world_size = get_sequence_parallel_world_size()
+        rank = get_sequence_parallel_rank()
+
+        # Split z into overlapping tiles and decode them separately.
+        # The tiles have an overlap to avoid seams between tiles.
+
+        z_patch = patchify(z, parallel_dim, parallel_overlap, world_size, rank)
+        z_patch = self.post_quant_conv(z_patch)
+        dec_patch = self.decoder(z_patch)
+        decoded_full = depatchify(dec_patch, parallel_dim, parallel_overlap, world_size, rank)
+
+        if not return_dict:
+            return (decoded_full,)
+
+        return DecoderOutput(sample=decoded_full)
+    
+    new_decode = new_decode.__get__(vae)
+    vae._decode = new_decode
+    pipe.vae = vae
+
 
 try:
     import xfuser
@@ -161,12 +254,12 @@ class Inference(object):
             assert args.use_cpu_offload is False, \
                 "Cannot enable use_cpu_offload in the distributed environment."
 
-            dist.init_process_group("nccl")
+            dist.init_process_group("hccl")
 
             assert dist.get_world_size() == args.ring_degree * args.ulysses_degree, \
                 "number of GPUs should be equal to ring_degree * ulysses_degree."
 
-            init_distributed_environment(rank=dist.get_rank(), world_size=dist.get_world_size())
+            init_distributed_environment(rank=dist.get_rank(), world_size=dist.get_world_size(),backend="hccl")
             
             initialize_model_parallel(
                 sequence_parallel_degree=dist.get_world_size(),
@@ -407,6 +500,7 @@ class HunyuanVideoSampler(Inference):
         self.default_negative_prompt = NEGATIVE_PROMPT
         if self.parallel_args['ulysses_degree'] > 1 or self.parallel_args['ring_degree'] > 1:
             parallelize_transformer(self.pipeline)
+            parallelize_vae(self.vae)
 
     def load_diffusion_pipeline(
         self,
