@@ -464,6 +464,60 @@ python3 sample_video.py \
 
 
 
+### npu  运行指引
+
+
+## 1、安装基础npu依赖
+☀️ 在运行代码前请参考[版本配套表](#版本配套表)，安装最新昇腾软件栈。
+
+<table border="0">
+  <tr>
+    <th>依赖软件</th>
+    <th>软件安装指南</th>
+  </tr>
+
+  <tr>
+    <td>昇腾NPU驱动</td>
+    <td rowspan="2">《 <a href="https://www.hiascend.com/document/detail/zh/canncommercial/80RC3/softwareinst/instg/instg_0003.html?Mode=PmIns&OS=Ubuntu&Software=cannToolKit">驱动固件安装指南</a> 》</td>
+  </tr>
+  <tr>
+    <td>昇腾NPU固件</td>
+  </tr>
+  <tr>
+    <td>Toolkit（开发套件）</td>
+    <td rowspan="3">《 <a href="https://www.hiascend.com/document/detail/zh/canncommercial/80RC3/softwareinst/instg/instg_0000.html">CANN 软件安装指南</a> 》</td>
+  </tr>
+  <tr>
+    <td>Kernel（算子包）</td>
+  </tr>
+  <tr>
+    <td>NNAL（Ascend Transformer Boost加速库）</td>
+  </tr>
+  <tr>
+    <td>PyTorch</td>
+    <td rowspan="3">《 <a href="https://www.hiascend.com/document/detail/zh/Pytorch/60RC3/configandinstg/instg/insg_0001.html">Ascend Extension for PyTorch 配置与安装</a> 》</td>
+  </tr>
+  <tr>
+    <td>torch_npu插件</td>
+  </tr>
+  <tr>
+    <td>apex</td>
+  </tr>
+</table>
+
+确保安装了8.0.0及以上版本的cann相关配套版本
+
+## 2、安装依赖
+```shell
+pip3 install -r requirements.txt
+pip install xfuser==0.4.0 --no-deps
+pip install yunchang==0.6.0  --no-deps
+
+
+rm {package_path}/xfuser/__init__.py
+```
+
+
 ## 🔗 BibTeX
 
 如果您认为 [HunyuanVideo](https://arxiv.org/abs/2412.03603) 给您的研究和应用带来了一些帮助，可以通过下面的方式来引用:

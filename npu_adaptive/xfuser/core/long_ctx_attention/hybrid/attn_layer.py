@@ -54,9 +54,9 @@ class xFuserLongContextAttention(LongContextAttention):
             raise RuntimeError(
                 f"ring_impl_type: {ring_impl_type} do not support SP kv cache."
             )
-        
-        from xfuser.core.long_ctx_attention.ring import xdit_ring_flash_attn_func
-        self.ring_attn_fn = xdit_ring_flash_attn_func
+        if not use_npufa:
+            from xfuser.core.long_ctx_attention.ring import xdit_ring_flash_attn_func
+            self.ring_attn_fn = xdit_ring_flash_attn_func
 
     @torch.compiler.disable
     def forward(

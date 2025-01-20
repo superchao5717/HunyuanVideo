@@ -10,5 +10,4 @@ python3 sample_video_npu.py \
 	--embedded-cfg-scale 6.0 \
     --flow-shift 7.0 \
     --flow-reverse \
-    --use-cpu-offload \
     --save-path ./results

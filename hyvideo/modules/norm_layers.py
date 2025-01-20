@@ -62,7 +62,7 @@ class RMSNorm(nn.Module):
 
         """
         if use_npu and hasattr(self, "weight"):
-            output = torch_npu.npu_rms_norm(x,x.weight, epsilon = self.eps)[0]
+            output = torch_npu.npu_rms_norm(x, self.weight, epsilon = self.eps)[0]
         else:
             output = self._norm(x.float()).type_as(x)
             if hasattr(self, "weight"):
