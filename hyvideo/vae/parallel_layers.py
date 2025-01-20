@@ -11,7 +11,7 @@ from torch.nn.parameter import Parameter
 from torch.nn.common_types import _size_3_t
 import torch_npu
 from einops import rearrange
-from hyvideo.xfuser.core.distributed import (
+from xfuser.core.distributed import (
         get_sequence_parallel_world_size,
         get_sequence_parallel_rank,
         )

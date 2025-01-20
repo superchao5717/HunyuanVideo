@@ -500,7 +500,7 @@ class HunyuanVideoSampler(Inference):
         self.default_negative_prompt = NEGATIVE_PROMPT
         if self.parallel_args['ulysses_degree'] > 1 or self.parallel_args['ring_degree'] > 1:
             parallelize_transformer(self.pipeline)
-            parallelize_vae(self.vae)
+            parallelize_vae(self.pipeline)
 
     def load_diffusion_pipeline(
         self,
