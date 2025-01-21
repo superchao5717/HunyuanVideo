@@ -15,8 +15,12 @@ from xfuser.core.distributed import (
         get_sequence_parallel_world_size,
         get_sequence_parallel_rank,
         )
-from .unet_causal_3d_blocks import prepare_causal_attention_mask, USE_FASCORE
+from .unet_causal_3d_blocks import prepare_causal_attention_mask
 from diffusers.models.attention_processor import Attention
+
+USE_FASCORE = True
+
+
 
 
 def patchify(hidden_state, dim, is_overlap, world_size, rank):
@@ -400,6 +404,9 @@ def register_upsample_forward(model):
                     hidden_states = first_h
                 
                 del first_h, other_h
+                torch.cuda.empty_cache()
+            
+
 
             # If the input is bfloat16, we cast back to bfloat16
             if dtype == torch.bfloat16:
@@ -524,6 +531,7 @@ class AttnProcessor2_0_sp():
         value = value.reshape(batch_size, -1, attn.heads, head_dim).transpose(1, 2).contiguous()
         
         if USE_FASCORE:
+            attention_mask = attention_mask.to(torch.uint8)
             scale = 1.0 / math.sqrt(head_dim)
             hidden_states = torch_npu.npu_fusion_attention(
                                 query, key, value,

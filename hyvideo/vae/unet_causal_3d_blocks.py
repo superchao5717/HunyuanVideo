@@ -33,7 +33,6 @@ from diffusers.models.normalization import RMSNorm
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
-USE_FASCORE=True
 
 def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_size: int = None):
 
@@ -49,10 +48,8 @@ def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_
         mask = (frame_indices.unsqueeze(1) >= (indices // n_hw))
         
         # 将mask中的True转换为0，False转换为负无穷大
-        if USE_FASCORE:
-            mask = torch.where(mask, torch.tensor(0, dtype=torch.uint8, device=device), torch.tensor(1, dtype=torch.uint8, device=device))
-        else:
-            mask = torch.where(mask, torch.tensor(0., dtype=dtype, device=device), torch.tensor(float('-inf'), dtype=dtype, device=device))
+
+        mask = torch.where(mask, torch.tensor(0., dtype=dtype, device=device), torch.tensor(float('-inf'), dtype=dtype, device=device))
         if batch_size is not None:
             mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
     else:
