@@ -637,6 +637,7 @@ class AttnProcessor2_0_fa():
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
         
         if USE_FASCORE:
+            attention_mask = attention_mask.to(torch.uint8)
             scale = 1.0 / math.sqrt(head_dim)
             hidden_states = torch_npu.npu_fusion_attention(
                                 query, key, value,
