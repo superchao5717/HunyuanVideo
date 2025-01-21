@@ -7,6 +7,15 @@ from yunchang.ring.utils import RingComm, update_out_and_lse
 from yunchang.ring.ring_flash_attn import RingFlashAttnFunc
 
 
+
+try :
+    import torch_npu
+    use_npufa=True
+except:
+    use_npufa=False
+    
+
+
 def xdit_ring_flash_attn_forward(
     process_group,
     q: torch.Tensor,
@@ -80,7 +89,18 @@ def xdit_ring_flash_attn_forward(
             key, value = k, v
 
         if not causal or step <= comm.rank:
-            if flash_attn.__version__ <= "2.6.3":
+            if use_npufa:
+                block_out, block_lse = torch_npu.npu_fused_infer_attention_score(
+                    q.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2),
+                    num_heads = q.shape[1],
+                    input_layout = "BNSD",
+                    scale = softmax_scale,
+                    pre_tokens=2147483647,
+                    next_tokens=2147483647,
+                    softmax_lse_flag=True)
+                block_out = out.transpose(1, 2)
+                block_lse = lse.to(q.dtype)
+            elif flash_attn.__version__ <= "2.6.3":
                 block_out, _, _, _, _, block_lse, _, _ = _flash_attn_forward(
                     q,
                     key,

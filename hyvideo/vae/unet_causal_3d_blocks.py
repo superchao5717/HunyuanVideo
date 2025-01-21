@@ -33,114 +33,7 @@ from diffusers.models.normalization import RMSNorm
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
-
-USE_FASCORE = True
-class AttnProcessor2_0_fa:
-    r"""
-    Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0).
-    """
-
-    def __init__(self):
-        if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError("AttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
-
-    def __call__(
-        self,
-        attn: Attention,
-        hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        temb: Optional[torch.Tensor] = None,
-        *args,
-        **kwargs,
-    ) -> torch.Tensor:
-
-
-        residual = hidden_states
-        if attn.spatial_norm is not None:
-            hidden_states = attn.spatial_norm(hidden_states, temb)
-
-        input_ndim = hidden_states.ndim
-
-        if input_ndim == 4:
-            batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
-
-        batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-        )
-
-        if attention_mask is not None:
-            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-            # scaled_dot_product_attention expects attention_mask shape to be
-            # (batch, heads, source_length, target_length)
-            attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
-
-        if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
-
-        query = attn.to_q(hidden_states)
-
-        if encoder_hidden_states is None:
-            encoder_hidden_states = hidden_states
-        elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
-
-        key = attn.to_k(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states)
-
-        inner_dim = key.shape[-1]
-        head_dim = inner_dim // attn.heads
-
-        query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-
-        key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-        value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-
-        if attn.norm_q is not None:
-            query = attn.norm_q(query)
-        if attn.norm_k is not None:
-            key = attn.norm_k(key)
-
-        # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        
-        if USE_FASCORE:
-            scale = 1.0 / math.sqrt(head_dim)
-            hidden_states = torch_npu.npu_fusion_attention(
-                                query, key, value,
-                                head_num=attn.heads,
-                                input_layout="BNSD",
-                                scale=scale,
-                                pse=None,
-                                atten_mask=attention_mask,
-                                pre_tockens=2147483647,
-                                next_tockens=2147483647,
-                                keep_prob=1.0,
-                                sync=False,
-                                inner_precise=0,
-                                )[0]
-        else:
-            hidden_states = F.scaled_dot_product_attention(
-                query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
-            )
-
-        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-        hidden_states = hidden_states.to(query.dtype)
-
-        # linear proj
-        hidden_states = attn.to_out[0](hidden_states)
-        # dropout
-        hidden_states = attn.to_out[1](hidden_states)
-
-        if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
-
-        if attn.residual_connection:
-            hidden_states = hidden_states + residual
-
-        hidden_states = hidden_states / attn.rescale_output_factor
-
-        return hidden_states
+USE_FASCORE=True
 
 def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_size: int = None):
 
@@ -174,32 +67,6 @@ def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_
     return mask
 
 
-
-def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_size: int = None):
-    seq_len = n_frame * n_hw
-    if device.type == 'npu':
-        indices = torch.arange(seq_len, dtype=torch.int64, device=device)
-        
-        # 计算每个位置对应的帧索引
-        frame_indices = indices // n_hw
-        
-        # 通过广播机制计算因果掩码
-        mask = (frame_indices.unsqueeze(1) >= (indices // n_hw))
-        
-        # 将mask中的True转换为0，False转换为负无穷大
-        mask = torch.where(mask, torch.tensor(0., dtype=dtype, device=device), torch.tensor(float('-inf'), dtype=dtype, device=device))
-        
-        if batch_size is not None:
-            mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
-    else:
-        seq_len = n_frame * n_hw
-        mask = torch.full((seq_len, seq_len), float("-inf"), dtype=dtype, device=device)
-        for i in range(seq_len):
-            i_frame = i // n_hw
-            mask[i, : (i_frame + 1) * n_hw] = 0
-        if batch_size is not None:
-            mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
-    return mask
 
 
 class CausalConv3d(nn.Module):

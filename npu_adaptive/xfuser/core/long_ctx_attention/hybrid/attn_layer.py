@@ -2,6 +2,7 @@ import torch
 from torch import Tensor
 
 import torch.distributed
+
 from yunchang import LongContextAttention
 from yunchang.comm.all_to_all import SeqAllToAll4D
 
@@ -54,6 +55,7 @@ class xFuserLongContextAttention(LongContextAttention):
             raise RuntimeError(
                 f"ring_impl_type: {ring_impl_type} do not support SP kv cache."
             )
+        
         if not use_npufa:
             from xfuser.core.long_ctx_attention.ring import xdit_ring_flash_attn_func
             self.ring_attn_fn = xdit_ring_flash_attn_func
@@ -157,12 +159,6 @@ class xFuserLongContextAttention(LongContextAttention):
             query_layer = SeqAllToAll4D.apply(
                 self.ulysses_pg, query, self.scatter_idx, self.gather_idx
             )
-
-            # if use_npufa:
-            key_value_layer = SeqAllToAll4D.apply(
-                self.ulysses_pg, torch.cat((key, value), dim=0), self.scatter_idx, self.gather_idx
-            )
-
             key_layer = SeqAllToAll4D.apply(
                 self.ulysses_pg, key, self.scatter_idx, self.gather_idx
             )
@@ -170,112 +166,75 @@ class xFuserLongContextAttention(LongContextAttention):
                 self.ulysses_pg, value, self.scatter_idx, self.gather_idx
             )
 
-        joint_tensor_kv = torch.cat((joint_tensor_key, joint_tensor_value), dim=0)
-        joint_tensor_kv = joint_tensor_kv.transpose(1, 2)
-        
-        b, s, n, d = key_value_layer.shape
-        kv_full = torch.empty([2, b, s, n, d], dtype=query_layer.dtype, device=query_layer.device)
-        torch.distributed.all_gather_into_tensor(kv_full, key_value_layer, group=self.ring_pg)
+            # if use_npufa:
+            # key_value_layer = SeqAllToAll4D.apply(
+            #     self.ulysses_pg, torch.cat((key, value), dim=0), self.scatter_idx, self.gather_idx
+            # )
 
-        kv_full = kv_full.permute(1, 3, 0, 2, 4).reshape(b, n, -1, d)
-        kv_full = torch.cat((kv_full, joint_tensor_kv), dim=2)
-        
-        query_layer = query_layer.transpose(1,2)
+        if use_npufa  :
+            scale = key_layer.shape[-1] ** -0.5
 
-        scale = query_layer.shape[-1] ** -0.5
-        key_layer, value_layer = kv_full.chunk(2, dim=0)       
-        out = torch_npu.npu_fusion_attention(
-                query_layer, key_layer, value_layer,
-                head_num=key_layer.shape[1],
-                input_layout="BNSD",
-                scale=scale,
-                pre_tockens=2147483647,
-                next_tockens=2147483647)[0].transpose(1, 2)
-
-
-        # if use_npufa:
-        #     scale = key_layer.shape[-1] ** -0.5
-
-        #     key_layer = torch.cat([key_layer, joint_tensor_key], dim=1).transpose(1,2).contiguous()
-        #     value_layer = torch.cat([value_layer, joint_tensor_value], dim=1).transpose(1,2).contiguous()
-        #     query_layer = query_layer.transpose(1,2).contiguous()
-        #     query_layer_list =query_layer.split(1, dim=1)
-        #     key_layer_list = key_layer.split(1, dim=1)
-        #     value_layer_list = value_layer.split(1, dim=1)
-        #     #query = query_layer.chunk(8, dim=2)
-        #     output = []
-        #     for i in range(len(query_layer_list)):
-        #         out = torch_npu.npu_fusion_attention(
-        #             query_layer_list[i], key_layer_list[i], value_layer_list[i],
-        #             head_num=1,
-        #             input_layout="BNSD",
-        #             scale=scale,
-        #             pre_tockens=2147483647,
-        #             next_tockens=2147483647)[0]
-        #         output.append(out)
-        #     out_concat = torch.cat(output, dim=1)
-        #     out = out_concat.transpose(1, 2)
-        # else:
-        #     out = self.ring_attn_fn(
-        #         query_layer,
-        #         key_layer,
-        #         value_layer,
-        #         dropout_p=dropout_p,
-        #         softmax_scale=softmax_scale,
-        #         causal=causal,
-        #         window_size=window_size,
-        #         alibi_slopes=alibi_slopes,
-        #         deterministic=deterministic,
-        #         return_attn_probs=return_attn_probs,
-        #         group=self.ring_pg,
-        #         attn_layer=attn if self.use_kv_cache else None,
-        #         joint_tensor_key=joint_tensor_key,
-        #         joint_tensor_value=joint_tensor_value,
-        #         joint_strategy=joint_strategy,
-        #     )
-
-
-
-        # if use_npufa:
-        #     joint_tensor_kv = torch.cat((joint_tensor_key, joint_tensor_value), dim=0)
-        #     joint_tensor_kv = joint_tensor_kv.transpose(1, 2)
+            key_layer = torch.cat([key_layer, joint_tensor_key], dim=1).transpose(1,2).contiguous()
+            value_layer = torch.cat([value_layer, joint_tensor_value], dim=1).transpose(1,2).contiguous()
+            query_layer = query_layer.transpose(1,2).contiguous()
+            query_layer_list =query_layer.split(1, dim=1)
+            key_layer_list = key_layer.split(1, dim=1)
+            value_layer_list = value_layer.split(1, dim=1)
+            #query = query_layer.chunk(8, dim=2)
+            output = []
+            for i in range(len(query_layer_list)):
+                out = torch_npu.npu_fusion_attention(
+                    query_layer_list[i], key_layer_list[i], value_layer_list[i],
+                    head_num=1,
+                    input_layout="BNSD",
+                    scale=scale,
+                    pre_tockens=2147483647,
+                    next_tockens=2147483647)[0]
+                output.append(out)
+            out_concat = torch.cat(output, dim=1)
+            out = out_concat.transpose(1, 2)
+        elif  0:
+            key_value_layer = SeqAllToAll4D.apply(
+                self.ulysses_pg, torch.cat((key, value), dim=0), self.scatter_idx, self.gather_idx)
+            joint_tensor_kv = torch.cat((joint_tensor_key, joint_tensor_value), dim=0)
+            joint_tensor_kv = joint_tensor_kv.transpose(1, 2)
             
-        #     b, s, n, d = key_value_layer.shape
-        #     kv_full = torch.empty([2, b, s, n, d], dtype=query_layer.dtype, device=query_layer.device)
-        #     torch.distributed.all_gather_into_tensor(kv_full, key_value_layer, group=self.ring_pg)
+            b, s, n, d = key_value_layer.shape
+            kv_full = torch.empty([2, b, s, n, d], dtype=query_layer.dtype, device=query_layer.device)
+            torch.distributed.all_gather_into_tensor(kv_full, key_value_layer, group=self.ring_pg)
 
-        #     kv_full = kv_full.permute(1, 3, 0, 2, 4).reshape(b, n, -1, d)
-        #     kv_full = torch.cat((kv_full, joint_tensor_kv), dim=2)
+            kv_full = kv_full.permute(1, 3, 0, 2, 4).reshape(b, n, -1, d)
+            kv_full = torch.cat((kv_full, joint_tensor_kv), dim=2)
             
-        #     query_layer = query_layer.transpose(1,2)
+            query_layer = query_layer.transpose(1,2)
 
-        #     scale = query_layer.shape[-1] ** -0.5
-        #     key_layer, value_layer = kv_full.chunk(2, dim=0)       
-        #     out = torch_npu.npu_fusion_attention(
-        #             query_layer, key_layer, value_layer,
-        #             head_num=key_layer.shape[1],
-        #             input_layout="BNSD",
-        #             scale=scale,
-        #             pre_tockens=2147483647,
-        #             next_tockens=2147483647)[0].transpose(1, 2)
-        # else:
-        #     out = self.ring_attn_fn(
-        #         query_layer,
-        #         key_layer,
-        #         value_layer,
-        #         dropout_p=dropout_p,
-        #         softmax_scale=softmax_scale,
-        #         causal=causal,
-        #         window_size=window_size,
-        #         alibi_slopes=alibi_slopes,
-        #         deterministic=deterministic,
-        #         return_attn_probs=return_attn_probs,
-        #         group=self.ring_pg,
-        #         attn_layer=attn if self.use_kv_cache else None,
-        #         joint_tensor_key=joint_tensor_key,
-        #         joint_tensor_value=joint_tensor_value,
-        #         joint_strategy=joint_strategy,
-        #     )
+            scale = query_layer.shape[-1] ** -0.5
+            key_layer, value_layer = kv_full.chunk(2, dim=0)       
+            out = torch_npu.npu_fusion_attention(
+                    query_layer, key_layer, value_layer,
+                    head_num=key_layer.shape[1],
+                    input_layout="BNSD",
+                    scale=scale,
+                    pre_tockens=2147483647,
+                    next_tockens=2147483647)[0].transpose(1, 2)
+        else:
+            out = self.ring_attn_fn(
+                query_layer,
+                key_layer,
+                value_layer,
+                dropout_p=dropout_p,
+                softmax_scale=softmax_scale,
+                causal=causal,
+                window_size=window_size,
+                alibi_slopes=alibi_slopes,
+                deterministic=deterministic,
+                return_attn_probs=return_attn_probs,
+                group=self.ring_pg,
+                attn_layer=attn if self.use_kv_cache else None,
+                joint_tensor_key=joint_tensor_key,
+                joint_tensor_value=joint_tensor_value,
+                joint_strategy=joint_strategy,
+            )
 
 
         if type(out) == tuple:
