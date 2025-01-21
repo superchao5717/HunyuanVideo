@@ -210,33 +210,46 @@ def parallel_attention(
         joint_tensor_value=v[:,img_kv_len:cu_seqlens_kv[1]],
         joint_strategy="rear",
     )
-    if flash_attn.__version__ >= '2.7.0':
-        attn2, *_ = _flash_attn_forward(
-            q[:,cu_seqlens_q[1]:],
-            k[:,cu_seqlens_kv[1]:],
-            v[:,cu_seqlens_kv[1]:],
-            dropout_p=0.0,
-            softmax_scale=q.shape[-1] ** (-0.5),
-            causal=False,
-            window_size_left=-1,
-            window_size_right=-1,
-            softcap=0.0,
-            alibi_slopes=None,
-            return_softmax=False,
-        )
+
+    if torch_npu_fa:
+        attn2 = torch_npu.npu_fusion_attention(
+                    q[:,cu_seqlens_q[1]:], # BSND
+                    k[:,cu_seqlens_kv[1]:],
+                    v[:,cu_seqlens_kv[1]:],
+                    head_num=q.shape[-2],
+                    input_layout="BSND",
+                    scale=q.shape[-1] ** (-0.5),
+                    pre_tockens=2147483647,
+                    next_tockens=2147483647)[0]
+
     else:
-        attn2, *_ = _flash_attn_forward(
-            q[:,cu_seqlens_q[1]:],
-            k[:,cu_seqlens_kv[1]:],
-            v[:,cu_seqlens_kv[1]:],
-            dropout_p=0.0,
-            softmax_scale=q.shape[-1] ** (-0.5),
-            causal=False,
-            window_size=(-1, -1),
-            softcap=0.0,
-            alibi_slopes=None,
-            return_softmax=False,
-        )
+        if flash_attn.__version__ >= '2.7.0':
+            attn2, *_ = _flash_attn_forward(
+                q[:,cu_seqlens_q[1]:],
+                k[:,cu_seqlens_kv[1]:],
+                v[:,cu_seqlens_kv[1]:],
+                dropout_p=0.0,
+                softmax_scale=q.shape[-1] ** (-0.5),
+                causal=False,
+                window_size_left=-1,
+                window_size_right=-1,
+                softcap=0.0,
+                alibi_slopes=None,
+                return_softmax=False,
+            )
+        else:
+            attn2, *_ = _flash_attn_forward(
+                q[:,cu_seqlens_q[1]:],
+                k[:,cu_seqlens_kv[1]:],
+                v[:,cu_seqlens_kv[1]:],
+                dropout_p=0.0,
+                softmax_scale=q.shape[-1] ** (-0.5),
+                causal=False,
+                window_size=(-1, -1),
+                softcap=0.0,
+                alibi_slopes=None,
+                return_softmax=False,
+            )
     attn = torch.cat([attn1, attn2], dim=1)
     b, s, a, d = attn.shape
     attn = attn.reshape(b, s, -1)
